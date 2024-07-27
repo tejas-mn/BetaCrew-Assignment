@@ -1,0 +1,141 @@
+const net = require('net');
+const fs = require('fs');
+const { exit } = require('process');
+
+const HOST = 'localhost';
+const PORT = 3000;
+
+let receivedPackets = [];
+let receivedSequences = new Set();
+
+//We can set lastSequenceNumber here if we know explicilty. In this case it's 14. 
+//But to dynamically calculate it. I have set it to zero.
+let lastSequenceNumber = 0;
+
+let resendCount = 0;
+let missingCount = 0;
+
+const client = new net.Socket();
+
+const connect = () => {
+  client.connect(PORT, HOST, () => {
+    console.log('Connected to BetaCrew server');
+    streamAllPackets();
+  });
+
+  client.on('data', handleData);
+  client.on('close', handleClose);
+  client.on('error', handleError);
+}
+
+const reConnect = () => {
+  client.connect(PORT, HOST, () => {
+    console.log('\nReconnected to BetaCrew server');
+  });
+}
+
+const closeConnection = () => {
+  client.end();
+  console.log('Connection closed by client');
+}
+
+// Send "Stream All Packets" request (Call Type 1)
+const streamAllPackets = () => {
+  const streamAllPacketsRequest = Buffer.alloc(2);
+  streamAllPacketsRequest.writeUInt8(1, 0); // Write callType 1
+  client.write(streamAllPacketsRequest);
+  console.log('\nSent "Stream All Packets" request');
+}
+
+// Send "Resend Packet" request (Call Type 2)
+const resendPacket = (sequenceNumber) => {
+  const resendPacketRequest = Buffer.alloc(2);
+  resendPacketRequest.writeUInt8(2, 0); // Write callType 2
+  resendPacketRequest.writeUInt8(sequenceNumber, 1); // Write sequenceNumber
+  client.write(resendPacketRequest);
+  console.log(`Sent "Resend Packet" request for sequence ${sequenceNumber}`);
+
+  if (resendCount == missingCount) {
+    closeConnection();
+    console.log("All missing packets received\n")
+  }
+}
+
+const generateJSONOutput = () => {
+  receivedPackets.sort((a, b) => a.packetSequence - b.packetSequence);
+  const jsonOutput = JSON.stringify(receivedPackets, null, 2);
+  fs.writeFileSync('packets.json', jsonOutput);
+  console.log('\nGenerated packets.json\n');
+}
+
+const handleData = (data) => {
+
+  console.log('Received data from server');
+
+  console.log('---');
+  // console.log(data.toJSON());
+
+  let offset = 0;
+  while (offset < data.length) {
+    const symbol = data.toString('ascii', offset, offset + 4);
+    offset += 4;
+
+    const buySellIndicator = data.toString('ascii', offset, offset + 1);
+    offset += 1;
+
+    const quantity = data.readInt32BE(offset);
+    offset += 4;
+
+    const price = data.readInt32BE(offset);
+    offset += 4;
+
+    const packetSequence = data.readInt32BE(offset);
+    offset += 4;
+
+    console.log(`Packet Sequence: ${packetSequence}`);
+    console.log(`Symbol: ${symbol}`);
+    console.log(`Buy/Sell: ${buySellIndicator}`);
+    console.log(`Quantity: ${quantity}`);
+    console.log(`Price: ${price}`);
+    console.log('---');
+
+    receivedPackets.push({ symbol, buySellIndicator, quantity, price, packetSequence });
+    receivedSequences.add(packetSequence);
+
+    //Assuming last sequence is never missed we will get to know the last sequence number / total sequence, here by taking max of all sequence numbers received
+    lastSequenceNumber = Math.max(lastSequenceNumber, packetSequence);
+  }
+}
+
+const handleClose = () => {
+
+  missingCount = lastSequenceNumber - receivedSequences.size;
+  console.log("\n>> Received Count: " + receivedSequences.size + " | Last Sequence: " + lastSequenceNumber + " | Missing Count: " + missingCount + "\n");
+
+  //Check if we need to resend send any missing packets
+  if (missingCount > 0) {
+    //connect again to resend
+    reConnect();
+
+    //loop till last sequence number and resend missing sequences
+    for (let seq = 1; seq <= lastSequenceNumber; seq++) {
+      if (!receivedSequences.has(seq)) {
+        setTimeout(() => {
+          resendCount++;
+          resendPacket(seq);
+        }, 150 * seq);
+      }
+    }
+  } else {
+    generateJSONOutput();
+  }
+
+  console.log('Connection closed.');
+}
+
+const handleError = (err) => {
+  console.error('Connection error:', err.code);
+  exit();
+}
+
+connect();
