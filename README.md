@@ -15,3 +15,5 @@ Clone the repo into your machine.
 3. Note: When client is running, the last packet with sequence number 14 might get missed though we assume that the last packet is never missed. So we need to run client.js some multiple times to collect all 14 packets.
 4. The output file, packets.json will be generated in the same folder (betacrew_exchange_client)
 5. Open the json file to view all the received packets.
+
+![image](https://github.com/user-attachments/assets/4e907c29-8067-4eed-98d7-09f8dd758370)
